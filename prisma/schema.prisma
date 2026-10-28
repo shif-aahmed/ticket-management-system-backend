@@ -1,0 +1,321 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Foundational model representing system and database health state.
+model SystemHealth {
+  id        String   @id @default(uuid())
+  status    String   @default("ok")
+  checkedAt DateTime @default(now()) @map("checked_at")
+  metadata  Json?
+
+  @@index([checkedAt])
+  @@map("system_health")
+}
+
+/// User roles supported across TicketGo RBAC
+enum Role {
+  administrator
+  agent
+  employee
+}
+
+/// Status representing user account state
+enum UserStatus {
+  active
+  inactive
+}
+
+/// Core User entity for authentication, profile management, and RBAC
+model User {
+  id           String      @id @default(uuid())
+  email        String      @unique
+  passwordHash String      @map("password_hash")
+  name         String
+  role         Role        @default(employee)
+  status       UserStatus  @default(active)
+  department   String?
+  title        String?
+  bio          String?     @db.Text
+  avatarUrl    String?     @map("avatar_url")
+  phone        String?
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  // Ticket relations
+  requestedTickets  Ticket[]           @relation("TicketRequester")
+  assignedTickets   Ticket[]           @relation("TicketAssignee")
+  ticketComments    TicketComment[]    @relation("CommentAuthor")
+  ticketActivities  TicketActivity[]   @relation("ActivityActor")
+  ticketAttachments TicketAttachment[] @relation("AttachmentUploader")
+
+  // Team relations
+  teamMemberships TeamMember[]
+  ledTeams        Team[]       @relation("TeamLead")
+
+  // Notification relations
+  notifications      Notification[] @relation("NotificationRecipient")
+  actedNotifications Notification[] @relation("NotificationActor")
+
+  // Knowledge base relations
+  kbArticles KnowledgeArticle[] @relation("ArticleAuthor")
+
+  @@index([role])
+  @@map("users")
+}
+
+/// Category status representing active/inactive state
+enum CategoryStatus {
+  active
+  inactive
+}
+
+/// Supporting Category model for Ticket classification and management
+model Category {
+  id                String         @id @default(uuid())
+  name              String         @unique
+  description       String?
+  status            CategoryStatus @default(active)
+  departmentDefault String?        @map("department_default")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+
+  tickets Ticket[]
+
+  @@map("categories")
+}
+
+/// Unified Ticket Types matching TicketGo specification
+enum TicketType {
+  task
+  support_request
+  incident
+  bug
+  general_request
+}
+
+/// Operational status of tickets
+enum TicketStatus {
+  submitted
+  open
+  in_progress
+  pending
+  resolved
+  closed
+}
+
+/// Priority levels for SLA and triage
+enum TicketPriority {
+  low
+  medium
+  high
+  critical
+}
+
+/// Event types for immutable ticket activity tracking
+enum TicketActivityType {
+  created
+  assigned
+  priority_changed
+  status_updated
+  due_date_changed
+  comment_added
+  updated
+}
+
+/// Core unified Ticket entity
+model Ticket {
+  id           String         @id @default(uuid())
+  ticketNumber Int            @default(autoincrement()) @map("ticket_number")
+  code         String         @unique
+  subject      String
+  description  String?        @db.Text
+  type         TicketType     @default(general_request)
+  status       TicketStatus   @default(submitted)
+  priority     TicketPriority @default(medium)
+  department   String?
+  project      String?
+  dueDate      DateTime?      @map("due_date")
+
+  requesterId String  @map("requester_id")
+  assigneeId  String? @map("assignee_id")
+  categoryId  String? @map("category_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  requester     User               @relation("TicketRequester", fields: [requesterId], references: [id])
+  assignee      User?              @relation("TicketAssignee", fields: [assigneeId], references: [id])
+  category      Category?          @relation(fields: [categoryId], references: [id])
+  comments      TicketComment[]
+  activities    TicketActivity[]
+  attachments   TicketAttachment[]
+  notifications Notification[]
+
+  @@index([status])
+  @@index([priority])
+  @@index([type])
+  @@index([requesterId])
+  @@index([assigneeId])
+  @@index([categoryId])
+  @@index([department])
+  @@index([createdAt])
+  @@map("tickets")
+}
+
+/// Comments posted to tickets
+model TicketComment {
+  id        String   @id @default(uuid())
+  ticketId  String   @map("ticket_id")
+  authorId  String   @map("author_id")
+  content   String   @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author User   @relation("CommentAuthor", fields: [authorId], references: [id])
+
+  @@index([ticketId])
+  @@index([authorId])
+  @@map("ticket_comments")
+}
+
+/// Immutable activity and audit history for tickets
+model TicketActivity {
+  id          String             @id @default(uuid())
+  ticketId    String             @map("ticket_id")
+  actorId     String             @map("actor_id")
+  type        TicketActivityType
+  description String
+  comment     String?
+  metadata    Json?
+  createdAt   DateTime           @default(now()) @map("created_at")
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  actor  User   @relation("ActivityActor", fields: [actorId], references: [id])
+
+  @@index([ticketId])
+  @@index([actorId])
+  @@map("ticket_activities")
+}
+
+/// File metadata records for attachments
+model TicketAttachment {
+  id         String   @id @default(uuid())
+  ticketId   String   @map("ticket_id")
+  uploaderId String   @map("uploader_id")
+  filename   String
+  mimeType   String   @map("mime_type")
+  size       Int
+  storageKey String   @map("storage_key")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  ticket   Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  uploader User   @relation("AttachmentUploader", fields: [uploaderId], references: [id])
+
+  @@index([ticketId])
+  @@index([uploaderId])
+  @@map("ticket_attachments")
+}
+
+/// Teams entity representing departments or working groups
+model Team {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  department  String?
+  teamLeadId  String?  @map("team_lead_id")
+  colorClass  String?  @default("text-[#064747]") @map("color_class")
+  bgClass     String?  @default("bg-[#E6F3EF]") @map("bg_class")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  teamLead User?        @relation("TeamLead", fields: [teamLeadId], references: [id], onDelete: SetNull)
+  members  TeamMember[]
+
+  @@map("teams")
+}
+
+/// Team membership join model
+model TeamMember {
+  id       String   @id @default(uuid())
+  teamId   String   @map("team_id")
+  userId   String   @map("user_id")
+  role     String   @default("member")
+  joinedAt DateTime @default(now()) @map("joined_at")
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@index([teamId])
+  @@index([userId])
+  @@map("team_members")
+}
+
+/// Notification types triggered across TicketGo
+enum NotificationType {
+  ticket_assigned
+  status_changed
+  priority_changed
+  comment_added
+  due_date_approaching
+  ticket_overdue
+}
+
+/// Notification entity for user alerts
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String           @map("user_id")
+  type      NotificationType
+  title     String
+  message   String
+  isRead    Boolean          @default(false) @map("is_read")
+  ticketId  String?          @map("ticket_id")
+  actorId   String?          @map("actor_id")
+  createdAt DateTime         @default(now()) @map("created_at")
+  readAt    DateTime?        @map("read_at")
+
+  user   User    @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  ticket Ticket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  actor  User?   @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@index([ticketId])
+  @@map("notifications")
+}
+
+/// Knowledge Base Articles
+model KnowledgeArticle {
+  id                String   @id @default(uuid())
+  title             String
+  category          String
+  excerpt           String   @db.Text
+  content           String   @db.Text
+  keywords          String[]
+  readingTime       String   @default("3 min") @map("reading_time")
+  viewCount         Int      @default(0) @map("view_count")
+  isPublished       Boolean  @default(true) @map("is_published")
+  authorId          String?  @map("author_id")
+  relatedArticleIds String[] @default([]) @map("related_article_ids")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  author User? @relation("ArticleAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([category])
+  @@index([isPublished])
+  @@index([createdAt])
+  @@map("knowledge_articles")
+}
